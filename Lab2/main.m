@@ -1,49 +1,43 @@
 clear; clc; close all;
-img = imread('test.jpg'); 
+img = imread('nictelefon2.jpg'); 
 
 %% Segmentation
 % segmentImage exported from Color Thresholder
-[binaryMask, ~] = segmentImage(img);
+[binaryMask, ~] = createMask(img);
 
 %% Mask filtration
-% Calling the separate filtration function
-cleanMask = filterMask(binaryMask);
+cleanMask = segmentImage(img, binaryMask);
 
 %% Region analysis 
-% Extracting geometric properties
-stats = regionprops(cleanMask, 'BoundingBox', 'Centroid', 'Circularity', 'Area', 'Eccentricity', 'PixelIdxList');
+stats = regionprops(cleanMask, 'BoundingBox', 'Centroid', 'Circularity', 'Area', 'Eccentricity', 'PixelIdxList', 'EquivDiameter');
 
-bboxes = [];
-labels = {};
-boxColors = {};
-validCount = 0;
+annotatedImg = img;
 
 %% Classification and annotation
 for i = 1:length(stats)
-    % filter out small noise that survived morphology
-    if stats(i).Area < 500
+    if stats(i).Area < 550
         continue;
     end
     
     [objectShape, uiColor] = analyzeShape(stats(i));
-    
     objectColor = analyzeColor(img, stats(i));
     
-    validCount = validCount + 1;
-    bboxes(validCount, :) = stats(i).BoundingBox;
-    labels{validCount} = sprintf('#%d %s %s', i, objectColor, objectShape);
+    labelStr = sprintf('#%d %s %s', i, objectColor, objectShape);
     
-    boxColors{validCount} = uiColor;
+    if strcmp(objectShape, 'Circle')
+        shapeType = 'circle';
+        coords = [stats(i).Centroid, stats(i).EquivDiameter/2];
+    else
+        shapeType = 'rectangle';
+        coords = stats(i).BoundingBox;
+    end
+    
+    annotatedImg = insertObjectAnnotation(annotatedImg, shapeType, coords, labelStr, ...
+        'LineWidth', 3, 'FontSize', 30, 'Color', uiColor, 'TextColor', 'white');
     
     fprintf('Object #%d: Area=%.0f, Circ=%.3f, Color=%s, Shape=%s\n', ...
             i, stats(i).Area, stats(i).Circularity, objectColor, objectShape);
 end
 
-if validCount > 0
-    finalImg = insertObjectAnnotation(img, 'rectangle', bboxes, labels, ...
-        'LineWidth', 3, 'FontSize', 17, 'Color', boxColors, 'TextColor', 'white');
-    imshow(finalImg);
-else
-    imshow(img);
-    title('No objects detected');
-end
+figure;
+imshow(annotatedImg);
