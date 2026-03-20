@@ -1,34 +1,22 @@
 clear; clc; close all;
-
 img = imread('test.jpg'); 
 
 %% Segmentation
 % segmentImage exported from Color Thresholder
-[binaryMask, maskedRGBImage] = segmentImage(img);
+[binaryMask, ~] = segmentImage(img);
 
 %% Mask filtration
-% alternatively, ImageSegmenter could have been used to export a function
-% fill internal holes (black numbers inside the shapes)
-cleanMask = imfill(binaryMask, 'holes'); 
-
-% closing operation (dilation -> erosion)
-% connect fragmented parts and smooth internal gaps
-se_close = strel('disk', 10); 
-cleanMask = imclose(cleanMask, se_close);
-
-% opening operation (erosion -> dilation)
-% remove small noise around the objects and smooth rough edges
-se_open = strel('disk', 5);
-cleanMask = imopen(cleanMask, se_open);
+% Calling the separate filtration function
+cleanMask = filterMask(binaryMask);
 
 %% Region analysis 
-% alternatively, ImageRegionAnalyzer could have been used to export a function
-% extract geometric properties for classification
-% added Area to filter out insignificant noise
-stats = regionprops(cleanMask, 'BoundingBox', 'Centroid', 'Circularity', 'Area', 'Eccentricity');
+% Extracting geometric properties
+stats = regionprops(cleanMask, 'BoundingBox', 'Centroid', 'Circularity', 'Area', 'Eccentricity', 'PixelIdxList');
 
-imshow(img);
-hold on;
+bboxes = [];
+labels = {};
+boxColors = {};
+validCount = 0;
 
 %% Classification and annotation
 for i = 1:length(stats)
@@ -37,28 +25,25 @@ for i = 1:length(stats)
         continue;
     end
     
-    fprintf('Object #%d: Area=%.0f, Circularity=%.3f, Eccentricity=%.3f\n', ...
-            i, stats(i).Area, stats(i).Circularity, stats(i).Eccentricity);
+    [objectShape, uiColor] = analyzeShape(stats(i));
     
-    if stats(i).Circularity > 0.94
-        objectShape = 'Circle';
-        boxColor = 'g';
-    else
-        objectShape = 'Square';
-        boxColor = 'r';
-    end
+    objectColor = analyzeColor(img, stats(i));
     
-    rectangle('Position', stats(i).BoundingBox, 'EdgeColor', boxColor, 'LineWidth', 2);
-   
-    labelStr = sprintf('#%d %s', i, objectShape);
+    validCount = validCount + 1;
+    bboxes(validCount, :) = stats(i).BoundingBox;
+    labels{validCount} = sprintf('#%d %s %s', i, objectColor, objectShape);
     
-    xPos = stats(i).Centroid(1);
-    yPos = stats(i).BoundingBox(2) - 20;
+    boxColors{validCount} = uiColor;
     
-    text(xPos, yPos, labelStr, ...
-        'Color', 'yellow', ...
-        'FontSize', 10, ...
-        'FontWeight', 'bold', ...
-        'HorizontalAlignment', 'center');
+    fprintf('Object #%d: Area=%.0f, Circ=%.3f, Color=%s, Shape=%s\n', ...
+            i, stats(i).Area, stats(i).Circularity, objectColor, objectShape);
 end
-hold off;
+
+if validCount > 0
+    finalImg = insertObjectAnnotation(img, 'rectangle', bboxes, labels, ...
+        'LineWidth', 3, 'FontSize', 17, 'Color', boxColors, 'TextColor', 'white');
+    imshow(finalImg);
+else
+    imshow(img);
+    title('No objects detected');
+end
