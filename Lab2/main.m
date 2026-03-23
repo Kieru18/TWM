@@ -2,10 +2,11 @@ clear; clc; close all;
 img = imread('nictelefon2.jpg'); 
 
 %% Segmentation
-% segmentImage exported from Color Thresholder
+% exported from Color Thresholder
 [binaryMask, ~] = createMask(img);
 
 %% Mask filtration
+% exported from Image Segmenter
 cleanMask = segmentImage(img, binaryMask);
 
 %% Region analysis 
