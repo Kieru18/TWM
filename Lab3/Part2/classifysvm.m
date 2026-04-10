@@ -89,7 +89,7 @@ for i=1:length(imtest.Files)
     test_hist(i,:) = wordHist(feats, words);
 end
 
-%% Punkt 1 - Uruchomienie SVM z domyślnymi parametrami (przykład ze skryptu)
+%% Punkt 1 - Uruchomienie SVM z domyślnymi parametrami
 % Demonstracja działania klasyfikatora przed optymalizacją
 close all;
 
@@ -121,7 +121,6 @@ fprintf('CV accuracy (k=5):    %.4f (%.2f%%)\n', 1-cv_err_default, (1-cv_err_def
 close all;
 
 % Siatka wartości - skala logarytmiczna
-% Zmodyfikuj zakresy jeśli optimum wypada na granicy siatki
 C_values = logspace(-2, 3, 8);   % 0.01 ... 1000
 gamma_values = logspace(-3, 2, 8);   % 0.001 ... 100
 k_folds = 5;
@@ -306,7 +305,9 @@ end
 % Mikro accuracy = łączna liczba poprawnych / wszystkie próbki
 micro_acc = sum(diag(cm_matrix)) / sum(cm_matrix(:)) * 100;
 
-% Makro accuracy = średnia accuracy po klasach
+% Makro accuracy = średnia accuracy po klasach 
+% | powinna byc srednia czulosc dla kazdej klasy??
+% różni się znacznie od mikro przy niezbalansowanych klasach
 macro_acc = mean(per_class_acc) * 100;
 
 % Makro F1 = średnia F1 po klasach
