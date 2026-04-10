@@ -63,7 +63,18 @@ all_features = zeros(total_features, 64, 'single');
 curr_idx = 1;
 for i=1:files_cnt
     I = readImage(imds.Files{i});
-    curr_features = extractFeatures(rgb2gray(I), all_points{i});
+
+    % fixed: Colormap must be a c-by-3 matrix. If you want to convert a 2-D grayscale image, use im2gray instead.
+
+    if size(I, 3) > 1
+        I2 = rgb2gray(I);
+    else
+        I2 = I;
+    end
+    curr_features = extractFeatures(I2, all_points{i});
+
+    %
+
     all_features(curr_idx:curr_idx+length(all_points{i})-1, :) = curr_features;
     curr_idx = curr_idx + length(all_points{i});
 end
@@ -312,7 +323,7 @@ ylabel('Skuteczność') ;
 legend('Zb. treningowy','Zb. walidacyjny') ;
 
 % Wyniki dla zbioru uczącego
-sel_iter = 1 % Do wypełnienia w ramach zadania 
+sel_iter = 22 % Do wypełnienia w ramach zadania 
 pred = hfun1(Ws(:,:,sel_iter),featurestrain) ;
 acc = getAccuracy(pred,labelstrain) * 100 ;
 
@@ -348,8 +359,9 @@ accsvalall = [] ;
 accsvalstd = [] ;
 
 lambdas = logspace(-15,5,15) ;
-%lambdas = logspace(...) ; % Zagęszczenie próby...
-%lambdas = logspace(...) ; % Zagęszczenie próby...
+lambdas = logspace(-3, 0, 15);
+%lambdas = logspace(-3, -1, 15);
+%lambdas = logspace(-2.5, -1.5, 15);
 %lambdas = logspace(...) ; % Zagęszczenie próby...
 features = file_hist ;
 features = [features, ones(size(features,1),1)] ;
@@ -407,7 +419,7 @@ legend('Zb. treningowy','Zb. walidacyjny') ;
 close all ;
 rng('default') ;
 
-lambda = 0 % Do wypełnienia w ramach zadania
+lambda = 0.0085 % Do wypełnienia w ramach zadania
 featurestrain = file_hist ;
 featurestrain = [featurestrain, ones(size(featurestrain,1),1)] ;
 [W, cost] = trainsimple(featurestrain, imds.Labels, lambda) ;
