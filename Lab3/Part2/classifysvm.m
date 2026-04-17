@@ -41,12 +41,14 @@ imds_full = imageDatastore("indoor/indoorCVPR_09/Images/", "IncludeSubfolders", 
 files_cnt = length(imds.Files);
 all_points = cell(files_cnt, 1);
 total_features = 0;
+
 for i=1:files_cnt
     I = readImage(imds.Files{i});
     all_points{i} = getFeaturePoints(I, feats_det, feats_uniform);
     total_features = total_features + length(all_points{i});
 end
 
+% Przygotowanie listy przechowującej indeksy plików i punktów charakterystycznych
 file_ids = zeros(total_features, 2);
 curr_idx = 1;
 for i=1:files_cnt
@@ -55,62 +57,54 @@ for i=1:files_cnt
     curr_idx = curr_idx + length(all_points{i});
 end
 
+% Obliczenie deskryptorów punktów charakterystycznych
 all_features = zeros(total_features, 64, 'single');
 curr_idx = 1;
 for i=1:files_cnt
     I = readImage(imds.Files{i});
-    if size(I, 3) > 1
-        Ig = rgb2gray(I);
-    else
-        Ig = I;
-    end
-    curr_features = extractFeatures(Ig, all_points{i});
+    curr_features = extractFeatures(rgb2gray(I), all_points{i});
     all_features(curr_idx:curr_idx+length(all_points{i})-1, :) = curr_features;
     curr_idx = curr_idx + length(all_points{i});
 end
 
-[idx, words, sumd, D] = kmeans(all_features, words_cnt, "MaxIter", 10000);
+% Tworzenie słownika
 
+% Klasteryzacja punktów 
+[idx, words, sumd, D] = kmeans(all_features, words_cnt, "MaxIter", 10000);
+% Wizualizacja wyliczonych słów
+
+% Wyznaczenie histogramów słów dla każdego obrazu treningowego
 file_hist = zeros(files_cnt, words_cnt);
 for i=1:files_cnt
     file_hist(i,:) = histcounts(idx(file_ids(:,1) == i), (1:words_cnt+1)-0.5, 'Normalization', 'probability');
 end
 
+% Wyznaczenie histogramów słów dla każdego obrazu testowego
 test_hist = zeros(length(imtest.Files), words_cnt);
 for i=1:length(imtest.Files)
     I = readImage(imtest.Files{i});
     pts = getFeaturePoints(I, feats_det, feats_uniform);
-    if size(I, 3) > 1
-        Ig = rgb2gray(I);
-    else
-        Ig = I;
-    end
-    feats = extractFeatures(Ig, pts);
+    feats = extractFeatures(rgb2gray(I), pts);
     test_hist(i,:) = wordHist(feats, words);
 end
 
-%% Punkt 1 - Uruchomienie SVM z domyślnymi parametrami
-% Demonstracja działania klasyfikatora przed optymalizacją
-close all;
-
+%% SVM - przykład
+% Uczenie wieloklasowego klasyfikatora SVM o parametrach C i gamma.
+% Rozpoznawanie wielu klas opiera się na regule one-vs-one
 C_default = 0.1;
 gamma_default = 0.1;
 
-temp_default = templateSVM('KernelFunction', 'gaussian', ...
-    'BoxConstraint', C_default, 'KernelScale', gamma_default);
-model_default = fitcecoc(file_hist, imds.Labels, 'Learners', temp_default);
+temp = templateSVM('KernelFunction', 'gaussian', 'BoxConstraint', C_default, 'KernelScale', gamma_default) ;
+model = fitcecoc(file_hist, imds.Labels, 'Learners', temp) ;
+train_err_default = loss(model, file_hist, imds.Labels, 'Lossfun', 'classiferror') ;
+test_err_default = loss(model, test_hist, imtest.Labels, 'Lossfun', 'classiferror') ;
+fprintf(1,'train_acc: %f, test_acc: %f\n', 1-train_err_default, 1-test_err_default) ;
 
-train_err_default = loss(model_default, file_hist,    imds.Labels,  'Lossfun', 'classiferror');
-test_err_default = loss(model_default, test_hist, imtest.Labels, 'Lossfun', 'classiferror');
-
-fprintf('\n--- Wyniki SVM z domyślnymi parametrami (C=%.2f, gamma=%.2f) ---\n', ...
-    C_default, gamma_default);
-fprintf('Accuracy treningowa:  %.4f (%.2f%%)\n', 1-train_err_default, (1-train_err_default)*100);
-fprintf('Accuracy testowa:     %.4f (%.2f%%)\n', 1-test_err_default,  (1-test_err_default)*100);
-
-modelcv_default = crossval(model_default, 'KFold', 5);
-cv_err_default  = kfoldLoss(modelcv_default);
-fprintf('CV accuracy (k=5):    %.4f (%.2f%%)\n', 1-cv_err_default, (1-cv_err_default)*100);
+% Kroswalidacja klasyfikatora w podziale na zbioru 4:1
+modelcv = crossval(model, 'KFold', 10) ; % Model 'kroswalidowany'   
+modelcv.Trained % Model 'kroswalidowany' zawiera w sobie faktycznie 5 modeli - każdy uczony przy innym podziale zbioru
+cv_err = kfoldLoss(modelcv) ; % Zagregowany błąd kroswalidacji
+fprintf(1,'Accuracy train: %f\n', 1-cv_err);
 
 %% Punkt 2 - Grid search z k-fold cross-validation
 % Wyczerpujące przeszukiwanie przestrzeni hiperparametrów C i gamma.
@@ -121,8 +115,8 @@ fprintf('CV accuracy (k=5):    %.4f (%.2f%%)\n', 1-cv_err_default, (1-cv_err_def
 close all;
 
 % Siatka wartości - skala logarytmiczna
-C_values = logspace(-2, 3, 8);   % 0.01 ... 1000
-gamma_values = logspace(-3, 2, 8);   % 0.001 ... 100
+C_values = logspace(-2, 3, 16);   % 0.01 ... 1000
+gamma_values = logspace(-3, 2, 16);   % 0.001 ... 100
 k_folds = 5;
 
 nC = length(C_values);
@@ -305,10 +299,9 @@ end
 % Mikro accuracy = łączna liczba poprawnych / wszystkie próbki
 micro_acc = sum(diag(cm_matrix)) / sum(cm_matrix(:)) * 100;
 
-% Makro accuracy = średnia accuracy po klasach 
-% | powinna byc srednia czulosc dla kazdej klasy??
+% Makro accuracy = średni recall po klasach 
 % różni się znacznie od mikro przy niezbalansowanych klasach
-macro_acc = mean(per_class_acc) * 100;
+macro_acc = mean(recall) * 100;
 
 % Makro F1 = średnia F1 po klasach
 macro_f1 = mean(f1);
