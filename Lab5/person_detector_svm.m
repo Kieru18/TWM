@@ -1,5 +1,7 @@
 %% =========================================================
 %  Detektor sylwetek – HOG + SVM (sliding window)
+%  Jakub Kieruczenko
+%  Franciszek Malewski
 %
 %  Sekcje:
 %    1. Konfiguracja
@@ -11,13 +13,13 @@
 %    7. Ewaluacja i wizualizacja (P-R curve, mAP)
 %
 %  Struktura katalogów:
-%    data/pos/                                – pozytywne próbki treningowe (64×128)
-%    data/neg/                                – negatywne próbki treningowe (64×128)
-%    data/test/INRIAPerson/Train/neg/         - negatywne próbki treningowe
-%                                               pełnoskalowe
-%    data/test/INRIAPerson/Test/pos/          – obrazy testowe
-%    data/test/INRIAPerson/Test/annotations/  – pliki .txt z round Truth (format INRIA/PASCAL)
-%    ./gTruth.mat                             - GT obrazów testowych z lab
+%    data/pos/                                 – pozytywne próbki treningowe (64×128)
+%    data/neg/                                 – negatywne próbki treningowe (64×128)
+%    data/test/INRIAPerson/Train/neg/          - negatywne próbki treningowe
+%                                                pełnoskalowe
+%    data/test/INRIAPerson/Test/pos/           – obrazy testowe
+%    data/test/INRIAPerson/Test/annotations/   – pliki .txt z round Truth (format INRIA/PASCAL)
+%    data/test/INRIAPerson/Test/pos/gTruth.mat - GT obrazów testowych z lab
 %% =========================================================
 
 %% 1. KONFIGURACJA
