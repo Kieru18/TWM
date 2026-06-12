@@ -25,6 +25,30 @@ MAX_INVISIBLE  = 8;    % [kl.]   po tylu klatkach bez detekcji track jest zamyka
 MAX_TRAIL      = 60;   % [pkt]   max długość wyświetlanej ścieżki
 MIN_DRAW_PTS   = 2;    % [pkt]   min liczba punktów do narysowania linii
 
+% -----------------------------------------------------------------------
+% MIN_HIT_STREAK: naprawa problemu z "blob split"
+%   Gdy dwa pojazdy jadą obok siebie, BlobAnalysis może przez chwilę
+%   widzieć je jako JEDEN blob. Po rozejściu się blob się "rozszczepia"
+%   na dwa — drugi blob nie ma pary w tracks → bez progu każdy taki split
+%   inkrementuje licznik błędnie.
+%   Rozwiązanie: nowy pojazd jest LICZONY dopiero po MIN_HIT_STREAK
+%   kolejnych klatkach z detekcją. Blob ze splitu znika po 1–2 klatkach
+%   i nigdy nie osiąga progu.
+% -----------------------------------------------------------------------
+MIN_HIT_STREAK  = 4;    % [kl.]   ile klatek z detekcją, żeby uznać pojazd
+
+% -----------------------------------------------------------------------
+% MAX_REACTIVATE / MAX_REACT_DIST: naprawa problemu z "blob merge"
+%   Gdy dwa pojazdy jadą blisko i są widoczne jako JEDEN blob przez więcej
+%   niż MAX_INVISIBLE klatek, jeden z tracków zostaje dezaktywowany.
+%   Po rozdzieleniu blob "nowego" pojazdu to w rzeczywistości stary track
+%   — bez reaktywacji sekcja 6 tworzy nowy track i zawyża licznik.
+%   Rozwiązanie (sekcja 4b): dla nieprzypisanych detekcji przeszukaj
+%   ścieżki zamknięte ≤ MAX_REACTIVATE klatek temu i reaktywuj najbliższą.
+% -----------------------------------------------------------------------
+MAX_REACTIVATE  = 30;   % [kl.]   okno reaktywacji zamkniętych ścieżek
+MAX_REACT_DIST  = 160;  % [px]    max odległość centroidu przy reaktywacji
+
 %% Stan śledzenia
 
 tracks        = [];    % tablica struktur pojazdów (id, centroids, color, ...)
@@ -78,7 +102,7 @@ while hasFrame(vidReader)
     %----------------------------------------------------------------------
     thr = spdMap > 2;
     thr = imclose(thr, strel('disk', 5));   % wypełnienie drobnych dziur
-
+    
     nexttile(3);
     imshow(thr);
     title('Maska obszarów ruchu');
@@ -94,7 +118,6 @@ while hasFrame(vidReader)
     detections = [];
     for i = 1:size(AREA, 1)
         if AREA(i) > 2000
-            % BUG FIX: oryginał używał x,y,w,h niezadeklarowanych w pętli
             x = BBOX(i, 1);  y = BBOX(i, 2);
             w = BBOX(i, 3);  h = BBOX(i, 4);
 
@@ -120,15 +143,17 @@ while hasFrame(vidReader)
     nTrk = length(tracks);
 
     %----------------------------------------------------------------------
-    % 4. Kojarzenie detekcji ze ścieżkami — zachłanne nearest-neighbour
+    % 4a. Kojarzenie detekcji ze ścieżkami — zachłanne nearest-neighbour
     %
     %   Macierz odległości distMat(t,d) = odległość euklidesowa między
     %   ostatnią pozycją ścieżki t a centroidem detekcji d.
     %   Pary (t,d) sortowane rosnąco; każda ścieżka i detekcja może
     %   zostać skojarzona co najwyżej raz.
     %----------------------------------------------------------------------
+
     assigned      = false(1, nDet);
     assignedTrack = zeros(1,  nDet);
+    reactivated   = false(1, nDet);   % detekcja reaktywuje zamkniętą ścieżkę
 
     if nTrk > 0 && nDet > 0
         distMat = inf(nTrk, nDet);
@@ -155,26 +180,75 @@ while hasFrame(vidReader)
     end
 
     %----------------------------------------------------------------------
-    % 5. Aktualizacja skojarzonych ścieżek
+    % 4b. Reaktywacja zamkniętych ścieżek
+    %
+    %   Dla detekcji bez pary z 4a: przeszukaj ścieżki dezaktywowane
+    %   ≤ MAX_REACTIVATE klatek temu. Jeśli któraś jest wystarczająco blisko
+    %   (≤ MAX_REACT_DIST), skojarz z nią zamiast tworzyć nowy track.
+    %   Aktywne ścieżki mają zawsze priorytet (obsłużone w 4a).
     %----------------------------------------------------------------------
+    usedInactiveTrk = false(1, nTrk);
     for d = 1:nDet
-        if assigned(d)
-            t = assignedTrack(d);
-            tracks(t).centroids = [tracks(t).centroids; detections(d).cc];
-            tracks(t).lastSeen  = frameIdx;
+        if assigned(d), continue; end
+        bestDist = MAX_REACT_DIST;
+        bestTrk  = -1;
+        for t = 1:nTrk
+            if tracks(t).active || usedInactiveTrk(t), continue; end
+            if (frameIdx - tracks(t).lastSeen) > MAX_REACTIVATE, continue; end
+            dist = norm(tracks(t).centroids(end,:) - detections(d).cc);
+            if dist < bestDist
+                bestDist = dist;
+                bestTrk  = t;
+            end
+        end
+        if bestTrk > 0
+            assignedTrack(d)           = bestTrk;
+            assigned(d)                = true;
+            reactivated(d)             = true;
+            usedInactiveTrk(bestTrk)   = true;
         end
     end
 
     %----------------------------------------------------------------------
-    % 6. Nowe ścieżki dla nieskojarzonych detekcji → nowy pojazd
+    % 5. Aktualizacja skojarzonych ścieżek + potwierdzanie pojazdów
+    %
+    %   Pojazd był już widziany → zapamiętaj nową pozycję.
+    %   Przy każdej aktualizacji rośnie hitCount.
+    %   Gdy hitCount osiągnie MIN_HIT_STREAK → potwierdź i policz pojazd.
+    %----------------------------------------------------------------------
+    for d = 1:nDet
+        if assigned(d)
+            t = assignedTrack(d);
+            if reactivated(d)
+                tracks(t).active = true;   % przywróć zamkniętą ścieżkę
+            end
+            tracks(t).centroids = [tracks(t).centroids; detections(d).cc];
+            tracks(t).lastSeen  = frameIdx;
+            tracks(t).hitCount  = tracks(t).hitCount + 1;
+
+            % Potwierdzenie pojazdu dopiero po MIN_HIT_STREAK klatkach.
+            if ~tracks(t).counted && tracks(t).hitCount >= MIN_HIT_STREAK
+                tracks(t).counted = true;
+                totalVehicles     = totalVehicles + 1;
+            end
+        end
+    end
+
+    %----------------------------------------------------------------------
+    % 6. Nowe ścieżki dla nieskojarzonych detekcji
+    %
+    %   Pojazd nie był wcześniej widziany → rozpocznij jego śledzenie.
+    %   NIE inkrementujemy totalVehicles — zrobi to sekcja 5 po MIN_HIT_STREAK.
     %----------------------------------------------------------------------
     for d = 1:nDet
         if ~assigned(d)
             newTrack.id        = nextTrackID;
-            newTrack.centroids = detections(d).cc;       % wiersz [x, y]
+            newTrack.centroids = detections(d).cc;
             newTrack.color     = palette(mod(nextTrackID-1, nPalette)+1, :);
             newTrack.lastSeen  = frameIdx;
             newTrack.active    = true;
+            newTrack.hitCount  = 1;     % pierwsza klatka detekcji
+            newTrack.counted   = false; % jeszcze niezliczony
 
             if isempty(tracks)
                 tracks = newTrack;
@@ -182,8 +256,7 @@ while hasFrame(vidReader)
                 tracks(end+1) = newTrack; %#ok<AGROW>
             end
 
-            nextTrackID   = nextTrackID + 1;
-            totalVehicles = totalVehicles + 1;
+            nextTrackID = nextTrackID + 1;
         end
     end
 
@@ -198,6 +271,9 @@ while hasFrame(vidReader)
 
     %----------------------------------------------------------------------
     % 8. Wizualizacja — tile 4
+    %
+    %   Potwierdzone (counted=true):     linia ciągła, pełny marker
+    %   Niepotwierdzone (counted=false): linia przerywana, pusty marker
     %----------------------------------------------------------------------
     ann = frameRGB;
     if nDet > 0
@@ -212,32 +288,39 @@ while hasFrame(vidReader)
     imshow(ann);
     hold on;
 
-    % Rysowanie ścieżek wszystkich pojazdów (aktywnych i zamkniętych)
     for t = 1:length(tracks)
         pts = tracks(t).centroids;
         col = tracks(t).color;
 
-        % Ogranicz wyświetlaną historię do MAX_TRAIL ostatnich punktów
         if size(pts, 1) > MAX_TRAIL
             pts = pts(end-MAX_TRAIL+1:end, :);
         end
 
-        % Linia łącząca kolejne pozycje centroidu
-        if size(pts, 1) >= MIN_DRAW_PTS
-            plot(pts(:,1), pts(:,2), '-', 'Color', col, 'LineWidth', 2);
+        if tracks(t).counted
+            % Potwierdzony pojazd — linia ciągła, wypełniony marker.
+            lineStyle  = '-';
+            markerFill = col;
+            markerSize = 8;
+        else
+            % Kandydat (niezliczony jeszcze) — linia przerywana, pusty marker.
+            lineStyle  = '--';
+            markerFill = 'none';
+            markerSize = 6;
         end
 
-        % Marker ostatniej (lub bieżącej) pozycji
-        plot(pts(end,1), pts(end,2), 'o', ...
-             'Color', col, 'MarkerFaceColor', col, 'MarkerSize', 8);
+        if size(pts, 1) >= MIN_DRAW_PTS
+            plot(pts(:,1), pts(:,2), lineStyle, 'Color', col, 'LineWidth', 2);
+        end
 
-        % Etykieta z numerem pojazdu
+        plot(pts(end,1), pts(end,2), 'o', ...
+             'Color', col, 'MarkerFaceColor', markerFill, 'MarkerSize', markerSize);
+
         text(pts(end,1)+6, pts(end,2)-6, sprintf('#%d', tracks(t).id), ...
              'Color', col, 'FontSize', 9, 'FontWeight', 'bold', ...
              'BackgroundColor', [0 0 0]);
     end
 
-    % Wektory średniego kierunku dla bieżących detekcji
+    % Wektory kierunku dla bieżących detekcji.
     for i = 1:nDet
         det = detections(i);
         x1 = det.cc(1);  y1 = det.cc(2);
@@ -246,13 +329,15 @@ while hasFrame(vidReader)
         line([x1 x2], [y1 y2], 'Color', 'w', 'LineWidth', 2);
     end
 
-    % Licznik w tytule
     if ~isempty(tracks)
-        nActive = sum([tracks.active]);
+        nActive    = sum([tracks.active]);
+        nPending   = sum([tracks.active] & ~[tracks.counted]);
     else
-        nActive = 0;
+        nActive  = 0;
+        nPending = 0;
     end
-    title(sprintf('Łącznie: %d pojazd(ów)  |  Aktywne: %d', totalVehicles, nActive));
+    title(sprintf('Potwierdzone: %d  |  Aktywne: %d  |  Kandydaci: %d', ...
+                  totalVehicles, nActive, nPending));
     hold off;
 
     drawnow;
@@ -263,4 +348,5 @@ end
 
 fprintf('\n==============================================\n');
 fprintf('  Łączna liczba pojazdów na nagraniu: %d\n', totalVehicles);
+fprintf('  (zliczanie po %d potwierdzonych klatkach)\n', MIN_HIT_STREAK);
 fprintf('==============================================\n');
